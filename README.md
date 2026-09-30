@@ -1,7 +1,7 @@
 ## Phase 1 : Reconnaissance statique et comparaison de chaînes
 
 ### 1. Reconnaissance initiale (Strings)
-Avant même de désassembler le binaire, j'ai effectué une première passe de reconnaissance avec l'outil `strings` de Sysinternals pour extraire le texte en clair du fichier `bomb.exe`.
+Avant même de désassembler le binaire, j'ai effectué une première phase de reconnaissance avec l'outil `strings` de Sysinternals pour extraire le texte en clair du fichier `bomb.exe`.
 Parmi les résultats, plusieurs chaînes suspectes ressemblaient à des mots de passe potentiels, notamment :
 * `passphrase`
 * `DrEvil`
@@ -55,3 +55,48 @@ La variable de validation démarre à 0 et subit les opérations suivantes en ca
 
 Le total est `-0x7e`, ce qui correspond à `-126` en décimal. Le second argument doit correspondre à ce résultat pour éviter l'explosion.
 Le mot de passe de la phase 3 est donc : `5 -126`
+
+---
+
+## Phase 4 : Récursion et parcours d'arbre dichotomique
+
+### 1. Analyse Statique et Contraintes d'Entrée (`phase_4`)
+L'inspection de la fonction `phase_4` dans WinDbg montre un appel à `sscanf` avec la chaîne de format `%d %d` (en regardant le registre `rdx`). Le programme exige donc deux nombres entiers.
+
+Avant de manipuler ces valeurs, le programme valide le domaine du premier argument :
+* Le premier entier doit être supérieur ou égal à 0.
+* Le premier entier doit être inférieur ou égal à `0xe` (14 en décimal).
+* Si ces bornes ne sont pas respectées, `explode_bomb` est appelée immédiatement.
+
+Une fois cette validation passée, le programme prépare les arguments pour une fonction secondaire `func4` :
+* `param_1` : Le premier entier saisi.
+* `param_2` : `0`.
+* `param_3` : `0xe` (14).
+
+À la sortie de `func4`, deux vérifications finales déterminent le désamorçage :
+* La valeur de retour de `func4` doit être égale à `10` (`0xa`).
+* Le second entier saisi doit également être égal à `10` (`local_114`).
+
+![le contenue de phase_4 dans Ghidra](C:/Users/User/Desktop/BombLab_WriteUp/Screenshots/Phase4_logic_Ghidra.png "phase_4 in Ghidra")
+
+### 2. Analyse de la Fonction Récursive (`func4`)
+La fonction `func4` implémente un parcours d'arbre binaire de recherche (dichotomie) avec accumulation :
+1. **Calcul du pivot / milieu :** `mid = param_2 + (param_3 - param_2) / 2`.
+2. **Branche gauche :** Si le premier entier est strictement inférieur au milieu (`param_1 < mid`), `func4` est appelée récursivement avec `[param_2, mid - 1]` et ajoute `mid` au résultat obtenu (`local_f4 = iVar1 + local_f4`).
+3. **Branche droite :** Si le milieu est strictement inférieur au premier entier (`mid < param_1`), `func4` est appelée récursivement avec `[mid + 1, param_3]` et ajoute `mid` au résultat obtenu.
+4. **Cas de base :** Si le premier entier est égal au milieu, aucun appel récursif n'est déclenché et la fonction retourne directement la valeur du milieu.
+
+![le contenue de func4 dans Ghidra](C:/Users/User/Desktop/BombLab_WriteUp/Screenshots/Phase4_func4_decomp.png "func4 in Ghidra")
+
+### 3. Résolution Mathématique
+Pour désamorcer la phase sans déclencher d'explosion, `func4(X, 0, 14)` doit retourner exactement 10 :
+* **Premier appel :** Bornes `[0, 14]`, le milieu calculé est `0 + (14 - 0) / 2 = 7`.
+* Pour atteindre une somme de 10, la branche inférieure doit retourner la différence : $10 - 7 = 3$.
+* **Second appel (branche gauche, $X < 7$) :** Bornes `[0, 6]`, le nouveau milieu est `0 + (6 - 0) / 2 = 3`.
+* Si $X = 3$, la condition d'égalité avec le milieu est satisfaite ($3 == 3$). La fonction atteint son cas de base et renvoie directement `3` sans nouvel appel récursif.
+* **Remontée de pile :** Le premier appel additionne ce résultat au premier pivot ($7 + 3 = 10$), satisfaisant la condition de retour.
+
+Le premier nombre recherché est donc `3`, et le second nombre requis par le test d'égalité est `10`.
+
+### 4. Solution
+Le mot de passe pour désamorcer la phase 4 est : `3 10`
