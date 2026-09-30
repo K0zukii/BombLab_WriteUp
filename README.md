@@ -1,160 +1,216 @@
-## Phase 1 : Reconnaissance statique et comparaison de chaînes
+# CMU Binary Bomb Lab (x86-64) - Complete Write-Up
 
-### 1. Reconnaissance initiale (Strings)
-Avant même de désassembler le binaire, j'ai effectué une première phase de reconnaissance avec l'outil `strings` de Sysinternals pour extraire le texte en clair du fichier `bomb.exe`.
-Parmi les résultats, plusieurs chaînes suspectes ressemblaient à des mots de passe potentiels, notamment :
+[Lire la version française](README.fr.md)
+
+## Project Overview
+This repository documents the complete walkthrough and reverse engineering of the renowned **Binary Bomb Lab** (originally designed at Carnegie Mellon University), completed as part of the **OST2 (OpenSecurityTraining2)** x86-64 Assembly curriculum.
+
+**Starting Point:** Prior to tackling this challenge, I had no prior experience in software reverse engineering or low-level binary analysis. This project was completed over several days, taking time between phases to thoroughly study assembly concepts and compiler behaviors. The learning curve was steep—particularly on Phases 5 and 6, which heavily involve C pointer arithmetic and dynamic data structures. Through persistence and cross-tool analysis (static decompilation and dynamic debugging), every phase was successfully defused.
+
+**Tooling:**
+* **WinDbg:** Dynamic analysis, memory inspection, and runtime control-flow tracing.
+* **Ghidra:** Static disassembly and decompiler analysis.
+* **Sysinternals Strings:** Initial static reconnaissance.
+
+---
+
+## Phase 1: Static Reconnaissance & String Comparison
+
+### 1. Initial Reconnaissance (Strings)
+Before disassembling the binary, an initial static triage was performed using Sysinternals `strings` to extract printable ASCII strings from `bomb.exe`.
+Several candidate strings resembled potential passphrases:
 * `passphrase`
 * `DrEvil`
 * `I am just a renegade hockey mom.`
 
-### 2. Analyse Dynamique (WinDbg)
-Pour confirmer quel mot de passe était le bon, j'ai choisi d'analyser la fonction `phase_1` dynamiquement sous WinDbg en lisant directement l'assembleur.
-En exécutant le code pas à pas (`p`), j'ai repéré la préparation des arguments juste avant l'appel à la fonction de vérification (`strings_not_equal`). Le programme chargeait une adresse mémoire spécifique dans un registre.
+![Strings command output](Screenshots/StringsCommand_Terminal.png)
 
-Pour inspecter le contenu de cette adresse, j'ai utilisé la commande d'affichage de chaîne ASCII dans WinDbg :
-`da [adresse_du_registre]`
+### 2. Dynamic Analysis (WinDbg)
+To determine which passphrase was expected, `phase_1` was analyzed dynamically under WinDbg.
+Stepping through instructions (`p`), a function argument was prepared immediately prior to calling `strings_not_equal`. The binary loaded a specific memory reference into a register.
 
-La mémoire a révélé la chaîne exacte attendue par le programme, confirmant l'une de mes hypothèses issues de la reconnaissance initiale.
+Inspecting this address using WinDbg's ASCII string display command (`da [address]`) revealed the exact string expected by the validation routine.
+
+![Inspecting memory in WinDbg](Screenshots/Phase1_windbg.png)
 
 ### 3. Solution
-Le mot de passe pour désamorcer la phase 1 est : `I am just a renegade hockey mom.`
+The passphrase to defuse Phase 1 is: `I am just a renegade hockey mom.`
 
 ---
 
-## Phase 2 : Boucles et structures de données (Tableaux)
+## Phase 2: Loops & Data Structures (Arrays)
 
-### 1. Analyse Dynamique et Statique
-L'analyse de la fonction `read_six_numbers` appelée au début de la phase 2 a révélé l'utilisation de `sscanf` avec un format nécessitant 6 entiers. En observant les décalages de 4 octets (`+4`, `+8`, etc...) sur la pile dans WinDbg, j'ai déduit que l'entrée était stockée dans un tableau de 6 entiers.
+### 1. Static and Dynamic Analysis
+Inspecting `read_six_numbers` called at the start of Phase 2 confirmed the use of `sscanf` requiring six integers. By observing consecutive 4-byte stack offsets (`+4`, `+8`, `+0Ch`, etc.) during runtime setup in WinDbg, it became clear that user input was stored into a contiguous integer array (`int[6]`).
 
-En passant sur Ghidra pour analyser la logique de validation, j'ai identifié deux conditions critiques :
-* Le premier entier du tableau doit être égal à `1`.
-* Une boucle itère sur les 5 entiers restants avec la logique suivante : `array[i] = array[i-1] * 2`.
+![Format string identified in WinDbg](Screenshots/Phase2_format_found_WinDBG.png)
 
-### 2. Résolution
-Chaque nombre doit être le double du précédent. En partant de 1, la suite logique est une progression géométrique de raison 2.
-Le mot de passe de la phase 2 est : `1 2 4 8 16 32`
+Switching to Ghidra to analyze the validation loop, two constraints were identified:
+* The first element must equal `1` (`array[0] == 1`).
+* A loop iterates over the remaining five integers enforcing: `array[i] == array[i - 1] * 2`.
 
----
+![Validation loop in Ghidra](Screenshots/Phase2_Function_Ghidra.png)
 
-## Phase 3 : Flux de contrôle et Fall-through Switch
+### 2. Solution
+Each successive number must be double its predecessor, forming a geometric progression of common ratio 2:
+$$2^0, 2^1, 2^2, 2^3, 2^4, 2^5$$
 
-### 1. Reconnaissance des arguments (WinDbg)
-J'ai d'abord exécuté la phase 3 dans WinDbg. En inspectant les arguments passés à `sscanf` avec la commande `da`, j'ai identifié la chaîne de format `%d %d`, indiquant que la bombe attendait deux nombres entiers.
-
-### 2. Analyse de l'algorithme (Ghidra)
-Le décompilateur a révélé une structure de type `switch` basée sur le premier entier fourni. L'analyse a mis en évidence deux contraintes majeures :
-* Une vérification finale exige que le premier entier soit inférieur ou égal à 5. Les cas 6 et 7 sont donc des impasses.
-* Le bloc `switch` ne contient aucun `break` avant le cas 7 (comportement de *fall-through*). Cela signifie que le programme exécute en cascade toutes les opérations mathématiques des cas inférieurs.
-
-### 3. Résolution
-J'ai choisi d'utiliser le cas `5`. Le premier argument est donc `5`.
-La variable de validation démarre à 0 et subit les opérations suivantes en cascade :
-* Case 5 : `- 0x7e`
-* Case 6 : `+ 0x7e`
-* Case 7 : `- 0x7e`
-
-Le total est `-0x7e`, ce qui correspond à `-126` en décimal. Le second argument doit correspondre à ce résultat pour éviter l'explosion.
-Le mot de passe de la phase 3 est donc : `5 -126`
+The input to defuse Phase 2 is: `1 2 4 8 16 32`
 
 ---
 
-## Phase 4 : Récursion et parcours d'arbre dichotomique
+## Phase 3: Control Flow & Fall-Through Switch Statements
 
-### 1. Analyse Statique et Contraintes d'Entrée (`phase_4`)
-L'inspection de la fonction `phase_4` dans WinDbg montre un appel à `sscanf` avec la chaîne de format `%d %d` (en regardant le registre `rdx`). Le programme exige donc deux nombres entiers.
+### 1. Argument Extraction (WinDbg)
+Executing Phase 3 under WinDbg and inspecting the `sscanf` arguments using `da` revealed the format string `%d %d`. The phase requires two integer inputs.
 
-Avant de manipuler ces valeurs, le programme valide le domaine du premier argument :
-* Le premier entier doit être supérieur ou égal à 0.
-* Le premier entier doit être inférieur ou égal à `0xe` (14 en décimal).
-* Si ces bornes ne sont pas respectées, `explode_bomb` est appelée immédiatement.
+![sscanf format string in WinDbg](Screenshots/Phase3_format_found_WinDBG.png)
 
-Une fois cette validation passée, le programme prépare les arguments pour une fonction secondaire `func4` :
-* `param_1` : Le premier entier saisi.
-* `param_2` : `0`.
-* `param_3` : `0xe` (14).
+### 2. Algorithm Decompilation (Ghidra)
+Ghidra's decompiler revealed a jump table implementing a C `switch` statement governed by the first integer input:
+* A post-switch boundary check enforces that the first integer must be $\le 5$ (cases 6 and 7 trigger an explosion).
+* Crucially, the `switch` block lacks `break` statements before case 7, exhibiting classic compiler **fall-through** behavior. Execution cascades through every lower case sequentially.
 
-À la sortie de `func4`, deux vérifications finales déterminent le désamorçage :
-* La valeur de retour de `func4` doit être égale à `10` (`0xa`).
-* Le second entier saisi doit également être égal à `10` (`local_114`).
+![Switch control flow in Ghidra](Screenshots/Phase3_Function_Ghidra.png)
 
-![le contenue de phase_4 dans Ghidra](Screenshots/Phase4_logic_Ghidra.png "phase_4 in Ghidra")
+### 3. Resolution
+Selecting case `5` as our entry point:
+* Case 5 executes: `- 0x7e`
+* Cascades into Case 6: `+ 0x7e`
+* Cascades into Case 7: `- 0x7e`
 
-### 2. Analyse de la Fonction Récursive (`func4`)
-La fonction `func4` implémente un parcours d'arbre binaire de recherche (dichotomie) avec accumulation :
-1. **Calcul du pivot / milieu :** `mid = param_2 + (param_3 - param_2) / 2`.
-2. **Branche gauche :** Si le premier entier est strictement inférieur au milieu (`param_1 < mid`), `func4` est appelée récursivement avec `[param_2, mid - 1]` et ajoute `mid` au résultat obtenu (`local_f4 = iVar1 + local_f4`).
-3. **Branche droite :** Si le milieu est strictement inférieur au premier entier (`mid < param_1`), `func4` est appelée récursivement avec `[mid + 1, param_3]` et ajoute `mid` au résultat obtenu.
-4. **Cas de base :** Si le premier entier est égal au milieu, aucun appel récursif n'est déclenché et la fonction retourne directement la valeur du milieu.
+The resulting accumulator evaluates to `-0x7e` (`-126` in decimal). The second argument must match this accumulated total.
 
-![le contenue de func4 dans Ghidra](Screenshots/Phase4_func4_decomp.png "func4 in Ghidra")
-
-### 3. Résolution Mathématique
-Pour désamorcer la phase sans déclencher d'explosion, `func4(X, 0, 14)` doit retourner exactement 10 :
-* **Premier appel :** Bornes `[0, 14]`, le milieu calculé est `0 + (14 - 0) / 2 = 7`.
-* Pour atteindre une somme de 10, la branche inférieure doit retourner la différence : $10 - 7 = 3$.
-* **Second appel (branche gauche, $X < 7$) :** Bornes `[0, 6]`, le nouveau milieu est `0 + (6 - 0) / 2 = 3`.
-* Si $X = 3$, la condition d'égalité avec le milieu est satisfaite ($3 == 3$). La fonction atteint son cas de base et renvoie directement `3` sans nouvel appel récursif.
-* **Remontée de pile :** Le premier appel additionne ce résultat au premier pivot ($7 + 3 = 10$), satisfaisant la condition de retour.
-
-Le premier nombre recherché est donc `3`, et le second nombre requis par le test d'égalité est `10`.
-
-### 4. Solution
-Le mot de passe pour désamorcer la phase 4 est : `3 10`
+The input to defuse Phase 3 is: `5 -126`
 
 ---
 
-## Phase 5 : Arithmétique de pointeurs, tableaux statiques et graphes fonctionnels
+## Phase 4: Recursion & Binary Search Trees
 
-### 1. Analyse Statique et Contraintes d'Entrée
-L'analyse de la fonction `phase_5` dans Ghidra débute par un appel à `sscanf` avec la chaîne de format `%d %d`. Deux entiers sont donc attendus en entrée.
+### 1. Static Constraints (`phase_4`)
+Inspecting `phase_4` reveals another `sscanf` call expecting two integers (`%d %d`).
+Strict range checks are enforced on the first integer:
+* It must satisfy $0 \le x \le 14$ (`0xe`).
+* Out-of-bounds values trigger `explode_bomb`.
 
-Le premier entier subit immédiatement une opération de masquage binaire :
-`local_154 = 1er_Nombre[0] & 0xf;`
+The binary then calls `func4` with three parameters: `func4(first_input, 0, 14)`.
+Upon return:
+* The return value of `func4` must equal `10` (`0xa`).
+* The second user input must also equal `10`.
 
-L'opération `& 0xf` (ET logique avec `1111` en binaire) isole les 4 bits de poids faible de la valeur saisie. Cela contraint mathématiquement le résultat à être un entier compris strictement dans l'intervalle `[0, 15]`.
+![phase_4 logic in Ghidra](Screenshots/Phase4_logic_Ghidra.png)
 
-![Décompilation de phase_5 dans Ghidra](Screenshots/phase5_decomp.png)
+### 2. Recursive Function Analysis (`func4`)
+`func4` implements a binary search tree (dichotomy) traversal with value accumulation:
+1. **Midpoint computation:** `mid = low + (high - low) / 2`.
+2. **Left/Right Branches:** The function recursively traverses the lower or upper half if the input is smaller or larger than `mid`, accumulating `mid` upon unwinding the call stack.
+3. **Base Case:** When the input matches `mid`, recursion terminates and returns `mid`.
 
-### 2. Décompilation et Déréférencement Mémoire (`DAT_14001f1d0`)
-Dans la boucle principale, Ghidra décompile l'affectation suivante :
-`1er_Nombre[0] = *(uint *)(&DAT_14001f1d0 + (longlong)(int)1er_Nombre[0] * 4);`
+![func4 decompilation in Ghidra](Screenshots/Phase4_func4_decomp.png)
 
-Bien que la syntaxe brute ressemble à un calcul arithmétique complexe, il s'agit de la transcription standard en langage C d'un accès par index dans un tableau d'entiers 32-bit (`table[index]`) :
-* `DAT_14001f1d0` correspond à l'adresse de base du tableau en mémoire (`.rdata`).
-* Le multiplicateur `4` représente la taille en octets d'un entier (`sizeof(int)`).
-* Le déréférencement `*` récupère la valeur contenue à cet emplacement mémoire.
+### 3. Mathematical Resolution
+To satisfy `func4(X, 0, 14) == 10`:
+* **Call 1:** Range `[0, 14]`, calculated midpoint is $0 + (14 - 0) / 2 = 7$. Remaining value needed: $10 - 7 = 3$.
+* **Call 2 (Left branch, $X < 7$):** Range `[0, 6]`, calculated midpoint is $0 + (6 - 0) / 2 = 3$.
+* If $X = 3$, the base case is reached immediately ($3 == 3$) and returns `3`.
+* Unwinding the stack computes $7 + 3 = 10$, satisfying the return condition.
 
-L'inspection de l'adresse `DAT_14001f1d0` (via la commande `dd` sous WinDbg) révèle un tableau statique de 16 entiers :
+The input to defuse Phase 4 is: `3 10`
+
+---
+
+## Phase 5: Pointer Arithmetic, Static Tables & Directed Graphs
+
+### 1. Static Constraints & Bitmasking
+Phase 5 expects two integers. The first argument undergoes bitwise AND masking:
+`index = first_input & 0xf;`
+
+This operation isolates the lowest 4 bits, constraining the starting index strictly within `[0, 15]`.
+
+![phase_5 decompilation in Ghidra](Screenshots/Phase5_decomp.png)
+
+### 2. Memory Dereferencing (`DAT_14001f1d0`)
+The decompiler shows an indexed pointer access: `*(uint *)(base + index * 4)`.
+Examining memory at `DAT_14001f1d0` reveals a static array of 16 integers:
 
 | Index | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
 | :---: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
-| **Valeur** | 10 | 2 | 14 | 7 | 8 | 12 | 15 | 11 | 0 | 4 | 1 | 13 | 3 | 9 | 6 | -- |
+| **Value** | 10 | 2 | 14 | 7 | 8 | 12 | 15 | 11 | 0 | 4 | 1 | 13 | 3 | 9 | 6 | -- |
 
-![Inspection mémoire du tableau statique](Screenshots/phase5_memory_table.png)
+![Static array inspection in memory](Screenshots/Phase5_memory_table.png)
 
-### 3. Logique de l'Algorithme (Parcours de Chaîne / Graphe)
-L'algorithme se comporte comme un automate fini ou un graphe orienté où chaque case pointe vers l'index de la case suivante :
-1. Le compteur d'étapes `i` et l'accumulateur `local_174` sont initialisés à 0.
-2. La boucle `while (1er_Nombre[0] != 0xf)` s'exécute tant que la valeur récupérée n'est pas égale à `15` (`0xf`).
-3. À chaque itération :
-   * Le compteur `i` est incrémenté de 1.
-   * La valeur de la case courante est extraite et remplace l'indice actuel.
-   * Cette valeur est ajoutée au cumul `local_174`.
+### 3. Graph Traversal Logic
+The loop acts as a directed graph / finite-state machine where each visited value serves as the array index for the next jump.
+To pass validation:
+* The traversal must take **exactly 15 hops** (`i == 0xf`) before landing on target value `15`.
+* The second user input must equal the **cumulative sum** of all 15 visited nodes.
 
-À la sortie de la boucle, deux conditions d'égalité strictes déterminent le succès :
-* `i == 0xf` (15) : Le parcours doit s'effectuer en **exactement 15 itérations**.
-* `local_174 == 2e_Nombre[0]` : Le second entier saisi doit correspondre exactement à la **somme cumulée** de toutes les valeurs visitées.
+### 4. Resolution
+Tracing the table backwards identifies a single valid 15-step chain originating at index `5`:
+`5 -> 12 -> 3 -> 7 -> 11 -> 13 -> 9 -> 4 -> 8 -> 0 -> 10 -> 1 -> 2 -> 14 -> 6 -> [15]`
 
-### 4. Résolution
-Pour visiter 15 étapes distinctes avant d'atterrir sur 15 (qui réside à l'index 6), il n'existe qu'une seule chaîne valide :
+Summing all visited values:
+$$12 + 3 + 7 + 11 + 13 + 9 + 4 + 8 + 0 + 10 + 1 + 2 + 14 + 6 + 15 = 115$$
 
-`Index 5 -> 12 -> 3 -> 7 -> 11 -> 13 -> 9 -> 4 -> 8 -> 0 -> 10 -> 1 -> 2 -> 14 -> 6 -> [Fin sur 15]`
+The input to defuse Phase 5 is: `5 115`
 
-Calcul du cumul des 15 valeurs visitées :
-12 + 3 + 7 + 11 + 13 + 9 + 4 + 8 + 0 + 10 + 1 + 2 + 14 + 6 + 15 = **115**
+---
 
-* Le premier nombre doit donc être égal à **5**.
-* Le second nombre doit être la somme calculée : **115**.
+## Phase 6: Linked Lists, Dynamic Memory & Endianness
 
-### 5. Solution
-Le mot de passe pour désamorcer la phase 5 est : `5 115`
+### 1. Input Constraints
+Phase 6 uses `read_six_numbers` to read six integers. Nested verification loops enforce:
+* Valid range: $1 \le \text{input}[i] \le 6$.
+* Strict uniqueness: duplicate integers trigger an explosion. The input must be a unique permutation of `{1, 2, 3, 4, 5, 6}`.
+
+![phase_6 decompilation in Ghidra](Screenshots/Phase6_decomp.png)
+
+### 2. Identifying Linked List Structures
+Decompiled pointer increments of `*(int **)(local_1b0 + 2)` translate to 8-byte offsets in x64 assembly (`MOV RAX, qword ptr [RAX + 0x8]`). This confirms each element is a linked list node:
+```c
+struct Node {
+    int value;         // Offset 0x0 (4 bytes): Node value
+    int id;            // Offset 0x4 (4 bytes): Node identifier (1 to 6)
+    struct Node *next; // Offset 0x8 (8 bytes): Pointer to next node
+};
+```
+The program rebuilds the list's `next` pointers according to the user-provided permutation. The terminal check requires the newly linked list to be sorted in **strictly descending order** (`current->value >= next->value`).
+
+### 3. Data Extraction & The Little-Endian Trap
+Inspecting the node values in static memory requires reading 32-bit integers under x86-64 **Little-Endian** byte ordering:
+
+![Inspecting Node structures in memory (Part 1)](Screenshots/Phase6_nodes_memory_part1.png)
+![Inspecting Node structures in memory (Part 2)](Screenshots/Phase6_nodes_memory_part2.png)
+
+* `node1`: `12 02 00 00` $\rightarrow$ `0x0212` $\rightarrow$ **530**
+* `node2`: `c2 01 00 00` $\rightarrow$ `0x01c2` $\rightarrow$ **450**
+* `node3`: `15 02 00 00` $\rightarrow$ `0x0215` $\rightarrow$ **533**
+* `node4`: `93 03 00 00` $\rightarrow$ `0x0393` $\rightarrow$ **915**
+* `node5`: `a7 03 00 00` $\rightarrow$ `0x03a7` $\rightarrow$ **935**
+* `node6`: `00 02 00 00` $\rightarrow$ `0x0200` $\rightarrow$ **512**
+
+### 4. Resolution
+Sorting the nodes in descending order by numerical value:
+$$935 > 915 > 533 > 530 > 512 > 450$$
+$$\text{node5} \rightarrow \text{node4} \rightarrow \text{node3} \rightarrow \text{node1} \rightarrow \text{node6} \rightarrow \text{node2}$$
+
+The input to defuse Phase 6 is: `5 4 3 1 6 2`
+
+---
+
+## Summary of Technical Competencies
+
+Completing this challenge consolidated several fundamental reverse engineering capabilities:
+* **Static Reconnaissance:** Identifying plaintext artifacts and symbol structures.
+* **Low-Level Assembly Analysis:** Dissecting calling conventions, stack frames, register allocation, and memory offsets.
+* **Control-Flow Deobfuscation:** Unraveling jump tables, compiler optimizations, and fall-through switch constructs.
+* **Algorithmic Reconstruction:** Reverse engineering recursive routines, binary search trees, and finite-state graph traversals without source code.
+* **Memory Forensics:** Dissecting heap/data structures, pointers, and accounting for architecture-specific byte ordering (Little-Endian).
+
+### Personal Takeaway
+
+![All phases successfully defused](Screenshots/bomb_defused.png)
+
+Seeing the final defusal message in the console was an immensely rewarding milestone. Tackling this lab pushed me well beyond my comfort zone. It taught me how to approach complex disassembled code methodically, how to filter compiler noise, and how to effectively leverage industry-standard tools like WinDbg and Ghidra.
+
+Overcoming the roadblocks on recursion and pointer structures transformed initial frustration into genuine confidence. This challenge confirmed my passion for binary analysis and reverse engineering—I look forward to applying these fundamentals to real-world malware analysis and vulnerability research.
