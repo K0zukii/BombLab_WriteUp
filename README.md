@@ -77,7 +77,7 @@ Une fois cette validation passée, le programme prépare les arguments pour une 
 * La valeur de retour de `func4` doit être égale à `10` (`0xa`).
 * Le second entier saisi doit également être égal à `10` (`local_114`).
 
-![le contenue de phase_4 dans Ghidra](C:/Users/User/Desktop/BombLab_WriteUp/Screenshots/Phase4_logic_Ghidra.png "phase_4 in Ghidra")
+![le contenue de phase_4 dans Ghidra](Screenshots/Phase4_logic_Ghidra.png "phase_4 in Ghidra")
 
 ### 2. Analyse de la Fonction Récursive (`func4`)
 La fonction `func4` implémente un parcours d'arbre binaire de recherche (dichotomie) avec accumulation :
@@ -86,7 +86,7 @@ La fonction `func4` implémente un parcours d'arbre binaire de recherche (dichot
 3. **Branche droite :** Si le milieu est strictement inférieur au premier entier (`mid < param_1`), `func4` est appelée récursivement avec `[mid + 1, param_3]` et ajoute `mid` au résultat obtenu.
 4. **Cas de base :** Si le premier entier est égal au milieu, aucun appel récursif n'est déclenché et la fonction retourne directement la valeur du milieu.
 
-![le contenue de func4 dans Ghidra](C:/Users/User/Desktop/BombLab_WriteUp/Screenshots/Phase4_func4_decomp.png "func4 in Ghidra")
+![le contenue de func4 dans Ghidra](Screenshots/Phase4_func4_decomp.png "func4 in Ghidra")
 
 ### 3. Résolution Mathématique
 Pour désamorcer la phase sans déclencher d'explosion, `func4(X, 0, 14)` doit retourner exactement 10 :
@@ -100,3 +100,61 @@ Le premier nombre recherché est donc `3`, et le second nombre requis par le tes
 
 ### 4. Solution
 Le mot de passe pour désamorcer la phase 4 est : `3 10`
+
+---
+
+## Phase 5 : Arithmétique de pointeurs, tableaux statiques et graphes fonctionnels
+
+### 1. Analyse Statique et Contraintes d'Entrée
+L'analyse de la fonction `phase_5` dans Ghidra débute par un appel à `sscanf` avec la chaîne de format `%d %d`. Deux entiers sont donc attendus en entrée.
+
+Le premier entier subit immédiatement une opération de masquage binaire :
+`local_154 = 1er_Nombre[0] & 0xf;`
+
+L'opération `& 0xf` (ET logique avec `1111` en binaire) isole les 4 bits de poids faible de la valeur saisie. Cela contraint mathématiquement le résultat à être un entier compris strictement dans l'intervalle `[0, 15]`.
+
+![Décompilation de phase_5 dans Ghidra](Screenshots/phase5_decomp.png)
+
+### 2. Décompilation et Déréférencement Mémoire (`DAT_14001f1d0`)
+Dans la boucle principale, Ghidra décompile l'affectation suivante :
+`1er_Nombre[0] = *(uint *)(&DAT_14001f1d0 + (longlong)(int)1er_Nombre[0] * 4);`
+
+Bien que la syntaxe brute ressemble à un calcul arithmétique complexe, il s'agit de la transcription standard en langage C d'un accès par index dans un tableau d'entiers 32-bit (`table[index]`) :
+* `DAT_14001f1d0` correspond à l'adresse de base du tableau en mémoire (`.rdata`).
+* Le multiplicateur `4` représente la taille en octets d'un entier (`sizeof(int)`).
+* Le déréférencement `*` récupère la valeur contenue à cet emplacement mémoire.
+
+L'inspection de l'adresse `DAT_14001f1d0` (via la commande `dd` sous WinDbg) révèle un tableau statique de 16 entiers :
+
+| Index | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
+| :---: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
+| **Valeur** | 10 | 2 | 14 | 7 | 8 | 12 | 15 | 11 | 0 | 4 | 1 | 13 | 3 | 9 | 6 | -- |
+
+![Inspection mémoire du tableau statique](Screenshots/phase5_memory_table.png)
+
+### 3. Logique de l'Algorithme (Parcours de Chaîne / Graphe)
+L'algorithme se comporte comme un automate fini ou un graphe orienté où chaque case pointe vers l'index de la case suivante :
+1. Le compteur d'étapes `i` et l'accumulateur `local_174` sont initialisés à 0.
+2. La boucle `while (1er_Nombre[0] != 0xf)` s'exécute tant que la valeur récupérée n'est pas égale à `15` (`0xf`).
+3. À chaque itération :
+   * Le compteur `i` est incrémenté de 1.
+   * La valeur de la case courante est extraite et remplace l'indice actuel.
+   * Cette valeur est ajoutée au cumul `local_174`.
+
+À la sortie de la boucle, deux conditions d'égalité strictes déterminent le succès :
+* `i == 0xf` (15) : Le parcours doit s'effectuer en **exactement 15 itérations**.
+* `local_174 == 2e_Nombre[0]` : Le second entier saisi doit correspondre exactement à la **somme cumulée** de toutes les valeurs visitées.
+
+### 4. Résolution
+Pour visiter 15 étapes distinctes avant d'atterrir sur 15 (qui réside à l'index 6), il n'existe qu'une seule chaîne valide :
+
+`Index 5 -> 12 -> 3 -> 7 -> 11 -> 13 -> 9 -> 4 -> 8 -> 0 -> 10 -> 1 -> 2 -> 14 -> 6 -> [Fin sur 15]`
+
+Calcul du cumul des 15 valeurs visitées :
+12 + 3 + 7 + 11 + 13 + 9 + 4 + 8 + 0 + 10 + 1 + 2 + 14 + 6 + 15 = **115**
+
+* Le premier nombre doit donc être égal à **5**.
+* Le second nombre doit être la somme calculée : **115**.
+
+### 5. Solution
+Le mot de passe pour désamorcer la phase 5 est : `5 115`
